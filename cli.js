@@ -9,7 +9,190 @@
 const { WebSocketServer } = require('ws');
 const readline = require('readline');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const tools = require('./tools');
+
+const MIME_MAP = {
+  // Images
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  // Documents
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.text': 'text/plain',
+  '.md': 'text/markdown',
+  '.markdown': 'text/markdown',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.rtf': 'application/rtf',
+  // Office formats
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  // Code & Data
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.yaml': 'text/yaml',
+  '.yml': 'text/yaml',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.css': 'text/css',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.cjs': 'text/javascript',
+  '.ts': 'text/typescript',
+  '.tsx': 'text/typescript',
+  '.jsx': 'text/javascript',
+  '.py': 'text/x-python',
+  '.sh': 'text/x-shellscript',
+  '.bash': 'text/x-shellscript',
+  '.zsh': 'text/x-shellscript',
+  '.sql': 'text/x-sql',
+  '.java': 'text/x-java-source',
+  '.c': 'text/x-c',
+  '.cpp': 'text/x-c++',
+  '.h': 'text/x-c',
+  '.hpp': 'text/x-c++',
+  '.rs': 'text/x-rust',
+  '.go': 'text/x-go',
+  // Archives
+  '.zip': 'application/zip',
+  '.tar': 'application/x-tar',
+  '.gz': 'application/gzip',
+  '.7z': 'application/x-7z-compressed',
+  // Audio & Video
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm'
+};
+
+function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return MIME_MAP[ext] || 'application/octet-stream';
+}
+
+const stagedFiles = new Map();
+
+function resolveFileItem(item, index = 1) {
+  if (!item) return null;
+
+  // Staged file reference by ID (e.g. file-...)
+  if (typeof item === 'string' && stagedFiles.has(item)) {
+    return stagedFiles.get(item);
+  }
+  if (typeof item === 'object' && item.file_id && stagedFiles.has(item.file_id)) {
+    return stagedFiles.get(item.file_id);
+  }
+
+  // 1. If item is a string
+  if (typeof item === 'string') {
+    const trimmed = item.trim();
+
+    // Data URL
+    if (trimmed.startsWith('data:')) {
+      const match = trimmed.match(/^data:([^;]+);base64,(.*)$/s);
+      if (match) {
+        const mime = match[1];
+        const ext = Object.keys(MIME_MAP).find((k) => MIME_MAP[k] === mime) || '.bin';
+        const rawExt = ext.startsWith('.') ? ext.slice(1) : ext;
+        return {
+          name: `upload_${Date.now()}_${index}.${rawExt}`,
+          type: mime,
+          data: match[2],
+          size: Math.round((match[2].length * 3) / 4)
+        };
+      }
+    }
+
+    // Local file path or file:// URL
+    let candidatePath = trimmed;
+    if (candidatePath.startsWith('file://')) {
+      candidatePath = candidatePath.replace(/^file:\/\//, '');
+    }
+    if (candidatePath.startsWith('~')) {
+      candidatePath = path.join(process.env.HOME || '', candidatePath.slice(1));
+    }
+    const resolvedPath = path.resolve(process.cwd(), candidatePath);
+    if (fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isFile()) {
+      const buffer = fs.readFileSync(resolvedPath);
+      return {
+        name: path.basename(resolvedPath),
+        type: getMimeType(resolvedPath),
+        data: buffer.toString('base64'),
+        size: buffer.length,
+        path: resolvedPath
+      };
+    }
+
+    // Raw base64 string
+    return {
+      name: `binary_${Date.now()}_${index}.bin`,
+      type: 'application/octet-stream',
+      data: trimmed,
+      size: Math.round((trimmed.length * 3) / 4)
+    };
+  }
+
+  // 2. If item is an object
+  if (typeof item === 'object') {
+    const itemPath = item.path || item.filepath || item.file_path;
+    if (itemPath) {
+      let candidate = itemPath;
+      if (candidate.startsWith('file://')) candidate = candidate.replace(/^file:\/\//, '');
+      if (candidate.startsWith('~')) candidate = path.join(process.env.HOME || '', candidate.slice(1));
+      const resolved = path.resolve(process.cwd(), candidate);
+      if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+        const buffer = fs.readFileSync(resolved);
+        return {
+          name: item.name || path.basename(resolved),
+          type: item.type || item.mime || getMimeType(resolved),
+          data: buffer.toString('base64'),
+          size: buffer.length,
+          path: resolved
+        };
+      }
+    }
+
+    let base64Data = item.data || item.base64 || item.content || '';
+    let mimeType = item.type || item.mime || item.mimeType || 'application/octet-stream';
+    let fileName = item.name || item.filename || `file_${Date.now()}_${index}`;
+
+    if (typeof base64Data === 'string' && base64Data.startsWith('data:')) {
+      const m = base64Data.match(/^data:([^;]+);base64,(.*)$/s);
+      if (m) {
+        if (!item.type && !item.mime) mimeType = m[1];
+        base64Data = m[2];
+      }
+    }
+
+    if (base64Data) {
+      if (!fileName.includes('.')) {
+        const ext = Object.keys(MIME_MAP).find((k) => MIME_MAP[k] === mimeType) || '.bin';
+        const rawExt = ext.startsWith('.') ? ext.slice(1) : ext;
+        fileName = `${fileName}.${rawExt}`;
+      }
+      return {
+        name: fileName,
+        type: mimeType,
+        data: base64Data,
+        size: item.size || Math.round((base64Data.length * 3) / 4)
+      };
+    }
+  }
+
+  return null;
+}
 
 // CLI Argument Parsing
 const args = process.argv.slice(2);
@@ -54,7 +237,9 @@ const WS_PORT = configuredPort;
 const PHONE_ENDPOINT = process.env.PHONE_ENDPOINT || 'http://localhost:8000';
 
 let activeSocket = null;
+let browserSocket = null;
 let pendingResponseResolver = null;
+let pendingResponseRejecter = null;
 let activePlatform = 'Gemini';
 let activeModel = 'gemini-web';
 
@@ -170,15 +355,31 @@ function queryPhoneSystem1(pathEndpoint, payload) {
   });
 }
 
-function sendPromptToChrome(promptText) {
+function sendPromptToChrome(promptText, files = []) {
   return new Promise((resolve, reject) => {
-    if (!activeSocket) {
+    const targetWs = browserSocket || activeSocket;
+    if (!targetWs || targetWs.readyState !== 1) {
       return reject(
-        new Error(`No browser extension connected. Open ${activePlatform} in Chrome with the extension active.`)
+        new Error(`Browser extension is not connected on ws://localhost:${WS_PORT}. Please open ${activePlatform} in Chrome.`)
       );
     }
     pendingResponseResolver = resolve;
-    activeSocket.send(JSON.stringify({ type: 'PROMPT', text: promptText, safeMode: isSafeMode }));
+    pendingResponseRejecter = reject;
+
+    const filesArray = Array.isArray(files) ? files : files ? [files] : [];
+    const resolvedFiles = filesArray
+      .map((f, idx) => resolveFileItem(f, idx + 1))
+      .filter(Boolean);
+
+    targetWs.send(
+      JSON.stringify({
+        type: 'PROMPT',
+        text: promptText,
+        files: resolvedFiles,
+        images: resolvedFiles,
+        safeMode: isSafeMode
+      })
+    );
   });
 }
 
@@ -245,8 +446,57 @@ async function runAgentLoop(userGoal) {
   }
 }
 
-function formatOpenAIMessagesToPrompt(messages, toolsList) {
+function parseMultipartBuffer(buffer, boundary) {
+  const boundaryBuffer = Buffer.from('--' + boundary);
+  let start = 0;
+  const files = [];
+
+  while (start < buffer.length) {
+    const idx = buffer.indexOf(boundaryBuffer, start);
+    if (idx === -1) break;
+    const nextIdx = buffer.indexOf(boundaryBuffer, idx + boundaryBuffer.length);
+    if (nextIdx === -1) break;
+
+    const part = buffer.slice(idx + boundaryBuffer.length, nextIdx);
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd !== -1) {
+      const headerStr = part.slice(0, headerEnd).toString('utf8');
+      let data = part.slice(headerEnd + 4);
+      if (data.length >= 2 && data[data.length - 2] === 13 && data[data.length - 1] === 10) {
+        data = data.slice(0, data.length - 2);
+      }
+
+      const filenameMatch = headerStr.match(/filename="([^"]+)"/i);
+      const mimeMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
+
+      if (filenameMatch) {
+        const filename = filenameMatch[1];
+        const mime = mimeMatch ? mimeMatch[1].trim() : getMimeType(filename);
+        files.push({
+          name: filename,
+          type: mime,
+          data: data.toString('base64'),
+          size: data.length
+        });
+      }
+    }
+    start = nextIdx;
+  }
+  return files;
+}
+
+function formatOpenAIMessagesToPrompt(messages, toolsList, extraFiles = []) {
   let prompt = '';
+  const files = [];
+
+  // 1. Process extra files from root request payload (e.g. payload.files or payload.images)
+  if (Array.isArray(extraFiles)) {
+    for (let i = 0; i < extraFiles.length; i++) {
+      const resolved = resolveFileItem(extraFiles[i], files.length + 1);
+      if (resolved) files.push(resolved);
+    }
+  }
+
   if (Array.isArray(toolsList) && toolsList.length > 0) {
     prompt += `You have access to the following developer tools on the user's laptop:\n`;
     for (const t of toolsList) {
@@ -267,16 +517,54 @@ If no tool is needed, simply write your direct response.\n\n`;
     prompt += messages
       .map((m) => {
         const roleLabel = m.role === 'system' ? 'System' : m.role === 'user' ? 'User' : 'Assistant';
-        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-        if (m.tool_call_id || m.role === 'tool') {
-          return `[Tool Result (${m.name || 'output'})]:\n${content}`;
+        let textContent = '';
+        if (typeof m.content === 'string') {
+          textContent = m.content;
+        } else if (Array.isArray(m.content)) {
+          for (const part of m.content) {
+            if (!part) continue;
+            if (part.type === 'text' && part.text) {
+              textContent += (textContent ? '\n' : '') + part.text;
+            } else if (part.type === 'image_url' && part.image_url && part.image_url.url) {
+              const res = resolveFileItem(part.image_url.url, files.length + 1);
+              if (res) files.push(res);
+            } else if (part.type === 'image' && part.source) {
+              const res = resolveFileItem(
+                {
+                  name: `image_${files.length + 1}.png`,
+                  type: part.source.media_type || 'image/png',
+                  data: part.source.data
+                },
+                files.length + 1
+              );
+              if (res) files.push(res);
+            } else if (part.type === 'document' && part.source) {
+              const res = resolveFileItem(
+                {
+                  name: `document_${files.length + 1}.pdf`,
+                  type: part.source.media_type || 'application/pdf',
+                  data: part.source.data
+                },
+                files.length + 1
+              );
+              if (res) files.push(res);
+            } else if (part.type === 'file' || part.type === 'input_file' || part.type === 'binary') {
+              const res = resolveFileItem(part.file || part, files.length + 1);
+              if (res) files.push(res);
+            }
+          }
+        } else {
+          textContent = JSON.stringify(m.content);
         }
-        return `[${roleLabel}]:\n${content}`;
+        if (m.tool_call_id || m.role === 'tool') {
+          return `[Tool Result (${m.name || 'output'})]:\n${textContent}`;
+        }
+        return `[${roleLabel}]:\n${textContent}`;
       })
       .join('\n\n');
   }
 
-  return prompt;
+  return { promptText: prompt, files };
 }
 
 function start() {
@@ -291,7 +579,10 @@ function start() {
       return;
     }
 
-    if (req.method === 'GET' && req.url === '/v1/models') {
+    const parsedUrl = new URL(req.url, `http://localhost:${WS_PORT}`);
+    const pathname = parsedUrl.pathname;
+
+    if (req.method === 'GET' && pathname === '/v1/models') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       const now = Math.floor(Date.now() / 1000);
       res.end(
@@ -322,7 +613,114 @@ function start() {
       return;
     }
 
-    if (req.method === 'POST' && req.url === '/v1/chat/completions') {
+    if (req.method === 'GET' && (pathname === '/v1/files' || pathname === '/files')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const fileList = Array.from(stagedFiles.entries()).map(([id, f]) => ({
+        id,
+        object: 'file',
+        bytes: f.size,
+        created_at: Math.floor(Date.now() / 1000),
+        filename: f.name,
+        purpose: 'user_data',
+        status: 'processed'
+      }));
+      res.end(JSON.stringify({ object: 'list', data: fileList }));
+      return;
+    }
+
+    if (req.method === 'POST' && (pathname === '/upload' || pathname === '/v1/files')) {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', async () => {
+        try {
+          const buffer = Buffer.concat(chunks);
+          const contentType = req.headers['content-type'] || '';
+          let filesToStage = [];
+
+          if (contentType.includes('multipart/form-data')) {
+            const boundaryMatch = contentType.match(/boundary=([^;]+)/i);
+            if (boundaryMatch) {
+              const boundary = boundaryMatch[1].trim();
+              filesToStage = parseMultipartBuffer(buffer, boundary);
+            }
+          } else if (contentType.includes('application/json')) {
+            const json = JSON.parse(buffer.toString('utf8') || '{}');
+            const fileItem = resolveFileItem(json);
+            if (fileItem) filesToStage.push(fileItem);
+          } else {
+            const filename = req.headers['x-filename'] || `binary_${Date.now()}.bin`;
+            const mime = contentType || getMimeType(filename);
+            filesToStage.push({
+              name: filename,
+              type: mime,
+              data: buffer.toString('base64'),
+              size: buffer.length
+            });
+          }
+
+          if (filesToStage.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'No valid binary or file payload found' } }));
+            return;
+          }
+
+          const stagedResults = [];
+          for (const f of filesToStage) {
+            const fileId = `file-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+            stagedFiles.set(fileId, f);
+            stagedResults.push({
+              id: fileId,
+              object: 'file',
+              bytes: f.size,
+              created_at: Math.floor(Date.now() / 1000),
+              filename: f.name,
+              purpose: 'user_data',
+              status: 'processed'
+            });
+          }
+
+          const promptParam = parsedUrl.searchParams.get('prompt');
+          const autoSend = parsedUrl.searchParams.get('send') === 'true' || !!promptParam;
+
+          if (autoSend) {
+            const targetWs = browserSocket || activeSocket;
+            if (!targetWs || targetWs.readyState !== 1) {
+              res.writeHead(503, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  error: {
+                    message: `Browser extension is not connected on ws://localhost:${WS_PORT}. Please open ${activePlatform} in Chrome.`
+                  }
+                })
+              );
+              return;
+            }
+            console.log(
+              `\n\x1b[35m[HTTP Upload]\x1b[0m Forwarding ${filesToStage.length} attached file(s) to ${activePlatform} (${activeModel})...`
+            );
+            const promptToSend = promptParam || 'Please inspect and analyze this uploaded file.';
+            const responseText = await sendPromptToChrome(promptToSend, filesToStage);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                files: stagedResults,
+                response: responseText
+              })
+            );
+            return;
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(stagedResults.length === 1 ? stagedResults[0] : { object: 'list', data: stagedResults }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: err.message } }));
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && (pathname === '/v1/chat/completions' || pathname === '/v1/vision/chat/completions' || pathname === '/chat/completions')) {
       let body = '';
       req.on('data', (chunk) => (body += chunk));
       req.on('end', async () => {
@@ -330,9 +728,11 @@ function start() {
           const payload = JSON.parse(body || '{}');
           const stream = payload.stream === true;
           const requestedModel = payload.model || activeModel;
-          const promptText = formatOpenAIMessagesToPrompt(payload.messages || [], payload.tools);
+          const extraFiles = payload.files || payload.images || [];
+          const { promptText, files } = formatOpenAIMessagesToPrompt(payload.messages || [], payload.tools, extraFiles);
+          const targetWs = browserSocket || activeSocket;
 
-          if (!activeSocket) {
+          if (!targetWs || targetWs.readyState !== 1) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
@@ -344,8 +744,8 @@ function start() {
             return;
           }
 
-          console.log(`\n\x1b[36m[OpenAI Proxy] Routing request for '${requestedModel}' to ${activePlatform}...\x1b[0m`);
-          const responseText = await sendPromptToChrome(promptText);
+          console.log(`\n\x1b[36m[OpenAI Proxy] Routing request for '${requestedModel}' to ${activePlatform} (Attachments: ${files.length})...\x1b[0m`);
+          const responseText = await sendPromptToChrome(promptText, files);
           const toolCall = parseToolCall(responseText);
 
           if (stream) {
@@ -440,40 +840,67 @@ function start() {
   const wss = new WebSocketServer({ server });
 
   wss.on('connection', (ws) => {
-    activeSocket = ws;
-    console.log(`\n\x1b[32m[Bridge Connected]\x1b[0m Browser extension attached on ws://localhost:${WS_PORT}`);
-
-    // Send initial configuration to extension
+    // Send initial configuration
     ws.send(JSON.stringify({ type: 'CONFIG', safeMode: isSafeMode }));
 
-    ws.on('message', (message) => {
+    ws.on('message', async (message) => {
       try {
         const data = JSON.parse(message);
         if (data.type === 'HELLO' || data.type === 'STATUS') {
+          browserSocket = ws;
+          activeSocket = ws;
           if (data.platform) activePlatform = data.platform;
           if (data.model) activeModel = data.model;
-          console.log(`\x1b[35m[Active Session]\x1b[0m Platform: ${activePlatform} | Model: ${activeModel}`);
+          if (data.log) console.log(`\x1b[34m[Extension Log]\x1b[0m ${data.log}`);
+          console.log(`\n\x1b[32m[Bridge Connected]\x1b[0m Platform: ${activePlatform} | Model: ${activeModel}`);
         } else if (data.type === 'RESPONSE' && pendingResponseResolver) {
           const resolve = pendingResponseResolver;
           pendingResponseResolver = null;
+          pendingResponseRejecter = null;
           resolve(data.text);
         } else if (data.type === 'ERROR') {
           console.error(`\x1b[31m[Extension Error]\x1b[0m ${data.message}`);
+          if (pendingResponseRejecter) {
+            const reject = pendingResponseRejecter;
+            pendingResponseResolver = null;
+            pendingResponseRejecter = null;
+            reject(new Error(data.message));
+          }
+        } else if ((data.type === 'PROMPT' || data.messages) && ws !== browserSocket) {
+          // Client calling via WebSocket directly (e.g. ws://localhost:8765)
+          let clientPrompt = data.text || '';
+          let clientFiles = (data.files || data.images || []).map((f, i) => resolveFileItem(f, i + 1)).filter(Boolean);
+          if (!clientPrompt && data.messages) {
+            const parsed = formatOpenAIMessagesToPrompt(data.messages, data.tools, clientFiles);
+            clientPrompt = parsed.promptText;
+            clientFiles = parsed.files;
+          }
+          console.log(`\n\x1b[36m[Client WS] Routing request to ${activePlatform} (Attachments: ${clientFiles.length})...\x1b[0m`);
+          try {
+            const resText = await sendPromptToChrome(clientPrompt, clientFiles);
+            ws.send(JSON.stringify({ type: 'RESPONSE', text: resText }));
+          } catch (wsErr) {
+            ws.send(JSON.stringify({ type: 'ERROR', message: wsErr.message }));
+          }
         }
       } catch (err) {
-        console.error('[CLI] Failed to parse message from extension:', err);
+        console.error('[CLI] Failed to parse message:', err);
       }
     });
 
     ws.on('close', () => {
-      console.log('\n\x1b[31m[Bridge Disconnected]\x1b[0m Browser extension detached.');
-      activeSocket = null;
+      if (ws === browserSocket || ws === activeSocket) {
+        console.log('\n\x1b[31m[Bridge Disconnected]\x1b[0m Browser extension detached.');
+        browserSocket = null;
+        activeSocket = null;
+      }
     });
   });
 
   server.listen(WS_PORT, () => {
     console.log(`\x1b[35m=== Gemini Bridge Orchestrator & Universal Proxy ===\x1b[0m`);
     console.log(`HTTP/OpenAI API: http://localhost:${WS_PORT}/v1`);
+    console.log(`File Upload:     POST http://localhost:${WS_PORT}/upload, /v1/files`);
     console.log(`WebSocket Bridge: ws://localhost:${WS_PORT}`);
     console.log(`Safety Mode:     ${isSafeMode ? '\x1b[32mEnabled (1500ms pacing + humanized jitter)\x1b[0m' : '\x1b[33mDisabled (--fast active)\x1b[0m'}`);
     console.log(`Waiting for browser connection (Gemini / ChatGPT / Claude)...`);
@@ -503,6 +930,60 @@ function start() {
       console.log('\x1b[33mNotice: Browser extension is not connected yet.\x1b[0m');
       console.log('1. Open Chrome at https://gemini.google.com, https://chatgpt.com, or https://claude.ai');
       console.log('2. Ensure the unpacked Gemini Bridge extension is loaded and active.');
+      rl.prompt();
+      return;
+    }
+
+    if (
+      input.startsWith('/upload ') ||
+      input.startsWith('/attach ') ||
+      input.startsWith('upload ') ||
+      input.startsWith('attach ')
+    ) {
+      const rest = input.replace(/^\/(?:upload|attach)\s+|^upload\s+|^attach\s+/, '').trim();
+      let targetPath = '';
+      let promptText = '';
+
+      if (rest.startsWith('"')) {
+        const nextQuote = rest.indexOf('"', 1);
+        if (nextQuote !== -1) {
+          targetPath = rest.slice(1, nextQuote);
+          promptText = rest.slice(nextQuote + 1).trim();
+        }
+      } else if (rest.startsWith("'")) {
+        const nextQuote = rest.indexOf("'", 1);
+        if (nextQuote !== -1) {
+          targetPath = rest.slice(1, nextQuote);
+          promptText = rest.slice(nextQuote + 1).trim();
+        }
+      }
+
+      if (!targetPath) {
+        const spaceIdx = rest.indexOf(' ');
+        if (spaceIdx !== -1) {
+          targetPath = rest.slice(0, spaceIdx).trim();
+          promptText = rest.slice(spaceIdx + 1).trim();
+        } else {
+          targetPath = rest;
+          promptText = 'Please inspect this uploaded file and explain its contents.';
+        }
+      }
+
+      const fileObj = resolveFileItem(targetPath);
+      if (!fileObj) {
+        console.log(`\x1b[31m[File Error]\x1b[0m Could not locate or read file: ${targetPath}`);
+        rl.prompt();
+        return;
+      }
+
+      console.log(`\x1b[35m[File Upload]\x1b[0m Staging ${fileObj.name} (${fileObj.type}, ${fileObj.size} bytes)...`);
+      try {
+        console.log(`\x1b[36m[Turn 1] Uploading to ${activePlatform} (${activeModel}) and submitting prompt...\x1b[0m`);
+        const resText = await sendPromptToChrome(promptText, [fileObj]);
+        console.log(`\n\x1b[32m=== Assistant Response ===\x1b[0m\n${resText}\n`);
+      } catch (err) {
+        console.error(`\x1b[31m[Bridge Error]\x1b[0m ${err.message}`);
+      }
       rl.prompt();
       return;
     }

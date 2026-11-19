@@ -10,15 +10,31 @@ PROFILE_DIR="${GEMINI_BRIDGE_PROFILE:-$HOME/.config/gemini-bridge-profile}"
 TARGET_URL="${2:-https://gemini.google.com}"
 
 CHROME_BIN=""
-for bin in google-chrome-stable google-chrome chromium chromium-browser; do
-  if command -v "$bin" &>/dev/null; then
-    CHROME_BIN="$bin"
+MAC_CHROME_CANDIDATES=(
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  "/Applications/Chromium.app/Contents/MacOS/Chromium"
+  "$HOME/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  "$HOME/Applications/Chromium.app/Contents/MacOS/Chromium"
+)
+
+for mac_bin in "${MAC_CHROME_CANDIDATES[@]}"; do
+  if [ -x "$mac_bin" ]; then
+    CHROME_BIN="$mac_bin"
     break
   fi
 done
 
 if [ -z "$CHROME_BIN" ]; then
-  echo "Error: No Chrome or Chromium binary found in PATH."
+  for bin in google-chrome-stable google-chrome chromium chromium-browser; do
+    if command -v "$bin" &>/dev/null; then
+      CHROME_BIN="$bin"
+      break
+    fi
+  done
+fi
+
+if [ -z "$CHROME_BIN" ]; then
+  echo "Error: No Chrome or Chromium binary found in PATH or Applications."
   exit 1
 fi
 

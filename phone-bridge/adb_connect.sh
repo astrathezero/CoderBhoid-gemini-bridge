@@ -6,10 +6,14 @@ set -e
 echo "=== Phone System 1 ADB Reverse Bridge ==="
 
 if ! command -v adb &>/dev/null; then
-  if [ -x "/home/bhoid/Android/Sdk/platform-tools/adb" ]; then
-    export PATH="/home/bhoid/Android/Sdk/platform-tools:$PATH"
+  if [ -x "$HOME/Library/Android/sdk/platform-tools/adb" ]; then
+    export PATH="$HOME/Library/Android/sdk/platform-tools:$PATH"
+  elif [ -x "$HOME/Android/Sdk/platform-tools/adb" ]; then
+    export PATH="$HOME/Android/Sdk/platform-tools:$PATH"
+  elif [ -x "/usr/local/bin/adb" ]; then
+    export PATH="/usr/local/bin:$PATH"
   else
-    echo "Error: adb command not found. Please install android-tools (e.g. sudo pacman -S android-tools)."
+    echo "Error: adb command not found. Please install android-platform-tools (e.g. brew install android-platform-tools or apt install adb)."
     exit 1
   fi
 fi

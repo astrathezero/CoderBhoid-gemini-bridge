@@ -207,6 +207,72 @@ print(response.choices[0].message.content)
 
 ---
 
+## 📎 Native File and Binary Upload (Simulated Attachments)
+
+Gemini Bridge supports **native file attachments** directly into active webchat sessions (Gemini, ChatGPT, Claude) exactly like clicking the attach/upload button in the browser:
+
+### 1. Interactive CLI Terminal (`gemini-bridge>`)
+Upload any local binary file, PDF, image, spreadsheet, or code file directly from the terminal prompt:
+```bash
+# Upload a file with custom prompt
+gemini-bridge> /upload /path/to/financial_report.pdf Summarize the key findings from this PDF
+
+# Or attach an image or data file
+gemini-bridge> /upload ./diagram.png What architecture is depicted here?
+```
+
+### 2. HTTP Upload Endpoints
+Upload files via `curl` or HTTP requests:
+```bash
+# Upload and stage a file (OpenAI-compatible /v1/files or /upload)
+curl -F "file=@./document.pdf" http://localhost:8765/upload
+
+# Upload and immediately send to the active webchat with a prompt:
+curl -F "file=@./photo.png" "http://localhost:8765/upload?prompt=Describe+this+image"
+```
+
+### 3. OpenAI / Antigravity API (`/v1/chat/completions`)
+Pass file paths, data URLs, or binary objects directly in your completions payload:
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8765/v1", api_key="gemini-bridge")
+
+# Using top-level files array:
+response = client.chat.completions.create(
+    model="gemini-4-hydrogen",
+    messages=[{"role": "user", "content": "Please analyze this attached document."}],
+    extra_body={"files": ["/path/to/local/data.csv"]}
+)
+
+# Or standard multimodal image_url:
+response = client.chat.completions.create(
+    model="gemini-4-hydrogen",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+            ]
+        }
+    ]
+)
+```
+
+### 4. CLI Python Helper (`query_hydrogen.py`)
+```bash
+python3 skills/hydrogen/scripts/query_hydrogen.py --file path/to/document.pdf "Summarize this PDF"
+```
+
+### Supported File Types
+- **Documents & Text**: `.pdf`, `.txt`, `.md`, `.csv`, `.tsv`, `.rtf`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`
+- **Images**: `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`, `.bmp`
+- **Code & Data**: `.json`, `.xml`, `.yaml`, `.py`, `.js`, `.ts`, `.html`, `.css`, `.sh`, `.sql`, etc.
+- **Archives & Media**: `.zip`, `.tar`, `.gz`, `.mp3`, `.wav`, `.mp4`
+
+---
+
 ## Using Gemini 4 Hydrogen with Google Antigravity & PWAs
 
 Gemini Bridge provides first-class support for **Gemini 4 Hydrogen** and the **Google Antigravity SDK** (`google-antigravity`), allowing you to harness Google's frontier Hydrogen model for autonomous developer workflows straight from your personal web session or standalone Chrome Progressive Web App (PWA).

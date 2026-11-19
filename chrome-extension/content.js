@@ -120,19 +120,24 @@
       },
       findSendButton() {
         return (
-          document.querySelector('button[aria-label*="Send message"]') ||
-          document.querySelector('button[aria-label*="Send"]') ||
+          document.querySelector('button[aria-label*="Send" i]') ||
+          document.querySelector('button[aria-label*="ส่ง" i]') ||
+          document.querySelector('button[data-test-id*="send"]') ||
           document.querySelector('button.send-button') ||
-          document.querySelector('button[data-test-id="send-button"]') ||
-          document.querySelector('.send-button-container button')
+          document.querySelector('.send-button-container button') ||
+          document.querySelector('button:has(mat-icon[fonticon="send"])') ||
+          document.querySelector('button:has(span[data-test-id*="send"])') ||
+          document.querySelector('div[role="button"][aria-label*="Send" i]') ||
+          document.querySelector('div[role="button"][aria-label*="ส่ง" i]')
         );
       },
       findStopButton() {
         return (
-          document.querySelector('button[aria-label*="Stop response"]') ||
-          document.querySelector('button[aria-label*="Stop"]') ||
+          document.querySelector('button[aria-label*="Stop" i]') ||
+          document.querySelector('button[aria-label*="หยุด" i]') ||
           document.querySelector('button.stop-button') ||
-          document.querySelector('.stop-button-container button')
+          document.querySelector('.stop-button-container button') ||
+          document.querySelector('button:has(mat-icon[fonticon="stop"])')
         );
       },
       getLatestResponseText() {
@@ -368,7 +373,336 @@
     return true;
   }
 
-  // 5. Prompt Injection and Submission
+  // 5. Universal Binary & Media File Attachment Engine
+  function parseIncomingFile(item, index) {
+    let name = `upload_${Date.now()}_${index}`;
+    let type = 'application/octet-stream';
+    let base64 = '';
+
+    if (typeof item === 'string') {
+      const trimmed = item.trim();
+      if (trimmed.startsWith('data:')) {
+        const match = trimmed.match(/^data:([^;]+);base64,(.*)$/s);
+        if (match) {
+          type = match[1];
+          base64 = match[2];
+        } else {
+          const comma = trimmed.indexOf(',');
+          if (comma !== -1) {
+            const m = trimmed.slice(0, comma).match(/:(.*?);/);
+            if (m) type = m[1];
+            base64 = trimmed.slice(comma + 1);
+          }
+        }
+      } else {
+        base64 = trimmed;
+      }
+    } else if (item && typeof item === 'object') {
+      name = item.name || item.filename || name;
+      type = item.type || item.mime || item.mimeType || type;
+      base64 = item.data || item.base64 || item.content || '';
+      if (typeof base64 === 'string' && base64.startsWith('data:')) {
+        const m = base64.match(/^data:([^;]+);base64,(.*)$/s);
+        if (m) {
+          if (!item.type && !item.mime) type = m[1];
+          base64 = m[2];
+        }
+      }
+    }
+
+    if (!base64 || typeof base64 !== 'string') return null;
+
+    if (!name.includes('.')) {
+      const extMap = {
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/gif': 'gif',
+        'image/svg+xml': 'svg',
+        'application/pdf': 'pdf',
+        'text/plain': 'txt',
+        'text/markdown': 'md',
+        'text/csv': 'csv',
+        'application/json': 'json',
+        'application/zip': 'zip',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+        'audio/mpeg': 'mp3',
+        'audio/wav': 'wav',
+        'video/mp4': 'mp4'
+      };
+      const ext = extMap[type] || 'bin';
+      name = `${name}.${ext}`;
+    }
+
+    try {
+      const cleanBase64 = base64.replace(/[\r\n\s]/g, '');
+      const binaryStr = atob(cleanBase64);
+      const len = binaryStr.length;
+      const u8arr = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        u8arr[i] = binaryStr.charCodeAt(i);
+      }
+      return new File([u8arr], name, { type, lastModified: Date.now() });
+    } catch (e) {
+      console.error('[Agent Bridge] Failed to decode base64 file:', e);
+      return null;
+    }
+  }
+
+  function hasAttachmentInDOM() {
+    return !!(
+      document.querySelector('uploader-file-preview') ||
+      document.querySelector('gem-attachment') ||
+      document.querySelector('gem-media-attachment') ||
+      document.querySelector('.attachment-preview-wrapper') ||
+      document.querySelector('.file-preview-chip') ||
+      document.querySelector('bard-attachment-card') ||
+      document.querySelector('[data-test-id*="attachment"]') ||
+      document.querySelector('[data-testid*="attachment"]') ||
+      document.querySelector('.attachment-card') ||
+      document.querySelector('.file-preview') ||
+      document.querySelector('[data-test-id*="file"]') ||
+      document.querySelector('mat-chip') ||
+      document.querySelector('button[aria-label*="Remove" i]') ||
+      document.querySelector('button[aria-label*="ลบ" i]') ||
+      document.querySelector('img[src*="blob:"]')
+    );
+  }
+
+  function isUploadInProgress() {
+    return !!(
+      document.querySelector('.gem-attachment-loading-container') ||
+      document.querySelector('.gem-attachment-content.loading') ||
+      document.querySelector('mat-progress-bar') ||
+      document.querySelector('[role="progressbar"]') ||
+      document.querySelector('.upload-progress') ||
+      document.querySelector('svg.spinner') ||
+      document.querySelector('[data-testid*="uploading"]')
+    );
+  }
+
+  function findAttachButton() {
+    return (
+      document.querySelector('button:has(mat-icon[fonticon="plus"])') ||
+      document.querySelector('button:has(mat-icon[data-mat-icon-name="plus"])') ||
+      document.querySelector('gem-icon-button.gem-menu-button button') ||
+      document.querySelector('gem-icon-button.menu-button button') ||
+      document.querySelector('button[aria-label*="เครื่องมือ" i]') ||
+      document.querySelector('button[aria-label*="Upload" i]') ||
+      document.querySelector('button[aria-label*="tools" i]') ||
+      document.querySelector('button[aria-label*="Attach" i]') ||
+      document.querySelector('button[aria-label*="Add" i]') ||
+      document.querySelector('button[aria-label*="แนบ" i]') ||
+      document.querySelector('button[aria-label*="อัปโหลด" i]') ||
+      document.querySelector('button[aria-label*="เพิ่ม" i]') ||
+      document.querySelector('button[data-testid*="attach"]') ||
+      document.querySelector('button[data-test-id*="uploader"]') ||
+      document.querySelector('button:has(mat-icon[fonticon="add"])') ||
+      document.querySelector('button:has(mat-icon[fonticon="attach_file"])') ||
+      document.querySelector('button:has(mat-icon[fonticon="upload"])') ||
+      document.querySelector('button.file-uploader') ||
+      document.querySelector('bard-file-uploader button')
+    );
+  }
+
+  function pickBestFileInput(fileInputs, file) {
+    if (!fileInputs || fileInputs.length === 0) return null;
+    const isMedia = file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/');
+    const ext = '.' + file.name.split('.').pop().toLowerCase();
+
+    if (isMedia) {
+      const mediaInput = fileInputs.find((i) => i.accept && (i.accept.includes('image') || i.accept.includes('video') || i.accept.includes('audio')));
+      if (mediaInput) return mediaInput;
+    } else {
+      const extInput = fileInputs.find((i) => i.accept && i.accept.toLowerCase().includes(ext));
+      if (extInput) return extInput;
+
+      const docInput = fileInputs.find(
+        (i) => i.accept && !i.accept.startsWith('image/') && (i.accept.includes('.pdf') || i.accept.includes('.txt') || i.accept.includes('*/*') || i.accept.includes('.doc') || i.accept.includes('.zip'))
+      );
+      if (docInput) return docInput;
+    }
+
+    const genericInput = fileInputs.find((i) => !i.accept || i.accept === '*' || i.accept === '*/*');
+    if (genericInput) return genericInput;
+
+    return fileInputs[0];
+  }
+
+  function dispatchFileInput(inputElement, file) {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+
+    if (inputElement._valueTracker) {
+      try {
+        inputElement._valueTracker.setValue('');
+      } catch {}
+    }
+
+    const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
+    if (desc && desc.set) {
+      try {
+        desc.set.call(inputElement, dt.files);
+      } catch {}
+    }
+    try {
+      inputElement.files = dt.files;
+    } catch {}
+
+    inputElement.dispatchEvent(new Event('input', { bubbles: true, cancelable: true, composed: true }));
+    inputElement.dispatchEvent(new Event('change', { bubbles: true, cancelable: true, composed: true }));
+  }
+
+  function dispatchDragAndDrop(file) {
+    const targets = [
+      currentAdapter.findInputBox(),
+      document.querySelector('rich-textarea'),
+      document.querySelector('bard-file-drop-target'),
+      document.querySelector('#prompt-textarea'),
+      document.querySelector('div[contenteditable="true"].ProseMirror'),
+      document.querySelector('form'),
+      document.querySelector('main'),
+      document.body
+    ].filter(Boolean);
+
+    const dt = new DataTransfer();
+    dt.items.add(file);
+
+    for (const target of targets) {
+      try {
+        target.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+        target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+        target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+        if (hasAttachmentInDOM()) break;
+      } catch {}
+    }
+  }
+
+  function dispatchClipboardPaste(file) {
+    const input = currentAdapter.findInputBox();
+    if (!input) return;
+    try {
+      input.focus();
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const pasteEvent = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clipboardData: dt
+      });
+      input.dispatchEvent(pasteEvent);
+    } catch {}
+  }
+
+  async function closeUploadMenuIfOpen() {
+    const menu = document.querySelector('.mat-mdc-menu-panel, [role="menu"], .cdk-overlay-pane');
+    if (menu) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+      const backdrop = document.querySelector('.cdk-overlay-backdrop');
+      if (backdrop) {
+        try { backdrop.click(); } catch {}
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
+  async function attachFiles(filesList) {
+    if (!Array.isArray(filesList) || filesList.length === 0) return true;
+
+    for (let i = 0; i < filesList.length; i++) {
+      const item = filesList[i];
+      if (!item) continue;
+      const file = parseIncomingFile(item, i + 1);
+      if (!file) continue;
+
+      try {
+        if (socket && socket.readyState === 1) {
+          socket.send(
+            JSON.stringify({
+              type: 'STATUS',
+              log: `Attaching file ${i + 1}/${filesList.length}: ${file.name} (${file.type}, ${file.size} bytes)...`
+            })
+          );
+        }
+
+        // Method 1: Find or open native File Input
+        let fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+
+        if (fileInputs.length === 0) {
+          const menuOpen = document.querySelector('.mat-mdc-menu-panel, [role="menu"]');
+          if (!menuOpen) {
+            const attachBtn = findAttachButton();
+            if (attachBtn) {
+              attachBtn.click();
+              await new Promise((r) => setTimeout(r, 500));
+              fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+            }
+          } else {
+            fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+          }
+        }
+
+        let assigned = false;
+        if (fileInputs.length > 0) {
+          const targetInput = pickBestFileInput(fileInputs, file);
+          if (targetInput) {
+            dispatchFileInput(targetInput, file);
+            assigned = true;
+          }
+        }
+
+        // Close menu if opened so input and buttons remain accessible
+        await closeUploadMenuIfOpen();
+
+        // Verification pause
+        await new Promise((r) => setTimeout(r, 800));
+
+        // Method 2: Drag & drop fallback if not visible in DOM
+        if (!hasAttachmentInDOM()) {
+          dispatchDragAndDrop(file);
+          await new Promise((r) => setTimeout(r, 600));
+        }
+
+        // Method 3: Clipboard paste fallback for images
+        if (!hasAttachmentInDOM() && file.type.startsWith('image/')) {
+          dispatchClipboardPaste(file);
+          await new Promise((r) => setTimeout(r, 600));
+        }
+
+        // Method 4: Wait for upload progress to settle
+        const uploadStart = Date.now();
+        while (Date.now() - uploadStart < 25000) {
+          if (hasAttachmentInDOM() && !isUploadInProgress()) {
+            await new Promise((r) => setTimeout(r, 500));
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 300));
+        }
+
+        if (socket && socket.readyState === 1) {
+          socket.send(
+            JSON.stringify({
+              type: 'STATUS',
+              log: `File ready: ${file.name} (${file.type}, ${file.size} bytes)`
+            })
+          );
+        }
+      } catch (err) {
+        console.error('[Agent Bridge] File attachment error:', err);
+        if (socket && socket.readyState === 1) {
+          socket.send(JSON.stringify({ type: 'STATUS', log: `Failed to attach ${file.name}: ${err.message}` }));
+        }
+      }
+    }
+
+    // Safety settle delay for input box
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    return true;
+  }
+
   function injectPrompt(text) {
     const input = currentAdapter.findInputBox();
     if (!input) {
@@ -387,15 +721,27 @@
       return true;
     }
 
-    // Rich contenteditable / ProseMirror elements
-    while (input.firstChild) {
-      input.removeChild(input.firstChild);
+    // Rich contenteditable / ProseMirror elements (Gemini / Claude / ChatGPT)
+    let p = input.querySelector('p');
+    if (!p) {
+      p = document.createElement('p');
+      input.appendChild(p);
     }
+    p.textContent = text;
 
-    const inserted = document.execCommand('insertText', false, text);
-    if (!inserted) {
-      input.innerText = text;
-    }
+    // Trigger Angular / Quill input listeners
+    input.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: text, bubbles: true, cancelable: true, composed: true }));
+    input.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: text, bubbles: true, composed: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(p);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand('insertText', false, text);
+    } catch {}
 
     input.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
@@ -404,8 +750,15 @@
 
   function submitPrompt() {
     const sendBtn = currentAdapter.findSendButton();
-    if (sendBtn && !sendBtn.disabled && sendBtn.getAttribute('aria-disabled') !== 'true') {
+    if (sendBtn) {
+      if (sendBtn.getAttribute('aria-disabled') === 'true') {
+        sendBtn.setAttribute('aria-disabled', 'false');
+      }
+      sendBtn.disabled = false;
       simulateHumanClick(sendBtn);
+      try {
+        sendBtn.click();
+      } catch {}
       return true;
     }
 
@@ -421,27 +774,7 @@
         cancelable: true,
         composed: true
       });
-      const enterPress = new KeyboardEvent('keypress', {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-        composed: true
-      });
-      const enterUp = new KeyboardEvent('keyup', {
-        key: 'Enter',
-        code: 'Enter',
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-        composed: true
-      });
       input.dispatchEvent(enterDown);
-      input.dispatchEvent(enterPress);
-      input.dispatchEvent(enterUp);
       return true;
     }
 
@@ -511,6 +844,7 @@
       socket.send(
         JSON.stringify({
           type: 'HELLO',
+          version: '2.0.0-attach-files',
           platform,
           model: activeModel,
           safeMode: safeModeActive,
@@ -560,8 +894,20 @@
           isGenerating = true;
           setStatus('busy');
 
+          // 1. Attach any binary files, documents, or media first
+          const filesToAttach = msg.files || msg.images;
+          if (Array.isArray(filesToAttach) && filesToAttach.length > 0) {
+            await attachFiles(filesToAttach);
+          }
+
           const baselineText = currentAdapter.getLatestResponseText();
-          const injected = injectPrompt(msg.text);
+          const promptText =
+            msg.text && msg.text.trim()
+              ? msg.text
+              : Array.isArray(filesToAttach) && filesToAttach.length > 0
+              ? 'Please inspect and analyze the attached file.'
+              : '';
+          const injected = injectPrompt(promptText);
 
           if (!injected) {
             isGenerating = false;
